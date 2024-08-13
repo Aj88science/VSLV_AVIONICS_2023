@@ -1,0 +1,123 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include <SD.h>
+#include <MPU6050_tockn.h>
+
+// Define Pins
+#define BMP280_I2C_ADDRESS 0x76
+#define SD_CS_PIN 10
+
+// Objects
+Adafruit_BMP280 bmp;      // BMP280 object
+MPU6050 mpu(Wire);        // MPU6050 object
+
+File dataFile;
+
+// Kalman filter variables
+float Q = 0.003;  // Process noise variance for the accelerometer
+float R = 0.03;   // Measurement noise variance - this is actually the variance of the measurement noise
+float P = 1.0;    // Estimation error covariance - start with a large value
+float X = 0.0;    // The initial value of the filter
+float K;          // Kalman gain
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();
+
+  // Initialize BMP280
+  if (!bmp.begin(BMP280_I2C_ADDRESS)) {
+    Serial.println("Could not find a valid BMP280 sensor, check wiring!");
+    while (1);
+  }
+
+  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
+                  Adafruit_BMP280::SAMPLING_X2, // temperature oversampling
+                  Adafruit_BMP280::SAMPLING_X16, // pressure oversampling
+                  Adafruit_BMP280::FILTER_X16,   // filtering
+                  Adafruit_BMP280::STANDBY_MS_500); // standby time
+
+  // Initialize MPU6050
+  mpu.begin();
+  mpu.calcGyroOffsets(true);
+
+  // Initialize SD card
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("SD card initialization failed!");
+    while (1);
+  }
+
+  Serial.println("BMP280, MPU6050, and SD card initialized successfully!");
+}
+
+void loop() {
+  // Read BMP280 altitude data
+  float rawAltitude = bmp.readAltitude(1013.25); // Assuming sea level pressure is 1013.25 hPa
+
+  // Apply Kalman filter
+  KalmanFilter(rawAltitude);
+
+  // Read MPU6050 data
+  mpu.update();
+  float accelX = mpu.getAccX();
+  float accelY = mpu.getAccY();
+  float accelZ = mpu.getAccZ();
+  float gyroX = mpu.getGyroX();
+  float gyroY = mpu.getGyroY();
+  float gyroZ = mpu.getGyroZ();
+
+  // Print data to Serial
+  Serial.print("Raw Altitude: ");
+  Serial.print(rawAltitude);
+  Serial.print(" m, Filtered Altitude: ");
+  Serial.print(X);
+  Serial.print(" m, AccelX: ");
+  Serial.print(accelX);
+  Serial.print(" m/s^2, AccelY: ");
+  Serial.print(accelY);
+  Serial.print(" m/s^2, AccelZ: ");
+  Serial.print(accelZ);
+  Serial.print(" m/s^2, GyroX: ");
+  Serial.print(gyroX);
+  Serial.print(" °/s, GyroY: ");
+  Serial.print(gyroY);
+  Serial.print(" °/s, GyroZ: ");
+  Serial.print(gyroZ);
+  Serial.println(" °/s");
+
+  // Write data to SD card
+  dataFile = SD.open("data.txt", FILE_WRITE);
+  if (dataFile) {
+    dataFile.print(rawAltitude);
+    dataFile.print(",");
+    dataFile.print(X);
+    dataFile.print(",");
+    dataFile.print(accelX);
+    dataFile.print(",");
+    dataFile.print(accelY);
+    dataFile.print(",");
+    dataFile.print(accelZ);
+    dataFile.print(",");
+    dataFile.print(gyroX);
+    dataFile.print(",");
+    dataFile.print(gyroY);
+    dataFile.print(",");
+    dataFile.print(gyroZ);
+    dataFile.println();
+    dataFile.close();
+  } else {
+    Serial.println("Error opening file for writing");
+  }
+
+  delay(100);
+}
+
+void KalmanFilter(float newValue) {
+  // Prediction update
+  P = P + Q;
+
+  // Measurement update
+  K = P / (P + R);
+  X = X + K * (newValue - X);
+  P = (1 - K) * P;
+}
